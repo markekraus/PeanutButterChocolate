@@ -9,8 +9,10 @@
     <PackageReference Include="Amazon.Lambda.Core" Version="1.0.0" />
     <PackageReference Include="Amazon.Lambda.Serialization.Json" Version="1.1.0" />
     <PackageReference Include="AWSSDK.CodeCommit" Version="3.3.3" />
+    <PackageReference Include="AWSSDK.KeyManagementService" Version="3.3.5" />
     <PackageReference Include="AWSSDK.SimpleNotificationService" Version="3.3.0.24" />
     <PackageReference Include="Newtonsoft.Json" Version="10.0.3" />
+    <PackageReference Include="YamlDotNet" Version="4.3.0" />
   </ItemGroup>
 
   <ItemGroup>

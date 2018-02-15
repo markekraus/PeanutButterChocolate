@@ -28,13 +28,8 @@ $Settings = @{
     ResourceGroupName             = 'PBnC'
     # See the -Location parameter of New-AzureRmResourceGroup for details
     ResourceGroupLocation         = "South Central US"
-    # Options: Free, Shared, Basic, Standard
-    # Note: Free and Shared will error due to an alwaysOn setting in the template
-    FunctionAppSku                = "Standard"
     # Options: Standard_LRS, Standard_GRS, Standard_RAGRS
     FunctionAppStorageAccountType = 'Standard_LRS'
-    #Options: 0, 1, 2 
-    FunctionAppWorkerSize         = 0
     AwsAccessKey      = $AWSCreds.UserName
     AWSSecretKey      = $AWSCreds.GetNetworkCredential().Password
     AwsProfile        = 'Aws01'
@@ -58,14 +53,12 @@ $Params = @{
 }
 $AzureAssets['ResourceGroup'] = New-AzureRmResourceGroup @Params
 # This Template deploys the storage account, App Service account, and Function App.
-$uri = 'https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/101-function-app-create-dedicated/azuredeploy.json'
+$uri = 'https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/101-function-app-create-dynamic/azuredeploy.json'
 $Params = @{
     TemplateUri        = $uri
     Name               = $AzureAssets['ResourceGroup'].ResourceGroupName
     ResourceGroupName  = $AzureAssets['ResourceGroup'].ResourceGroupName
     appName            = $AzureAssets['ResourceGroup'].ResourceGroupName
-    sku                = $Settings.FunctionAppSku
-    workerSize         = $Settings.FunctionAppWorkerSize
     storageAccountType = $Settings.FunctionAppStorageAccountType
 }
 $AzureAssets['Deployment'] = New-AzureRmResourceGroupDeployment @Params -ErrorVariable 'DeploymentErrors' 
@@ -91,14 +84,12 @@ Describe "Deployment of '$($Settings.ResourceGroupName)' Azure Function App" {
     It "Has a Storage Account." {
         $AzureAssets['Storage'] = Get-AzureRmStorageAccount -ResourceGroupName $AzureAssets['ResourceGroup'].ResourceGroupName
 
-        $AzureAssets['Storage'].Sku.Tier | Should -Be $Settings.FunctionAppSku
         $AzureAssets['Storage'].ProvisioningState | Should -BeExactly 'Succeeded'
     }
     It "Has an App Service Plan." {
         $AzureAssets['AppService'] = Get-AzureRmAppServicePlan -ResourceGroupName $AzureAssets['ResourceGroup'].ResourceGroupName
 
         $AzureAssets['AppService'].Status | Should -BeExactly 'Ready'
-        $AzureAssets['AppService'].Sku.Tier | Should -Be $Settings.FunctionAppSku
         $AzureAssets['AppService'].NumberOfSites | Should -Be 1
     }
     It "Has a Web App." {
@@ -118,18 +109,11 @@ Describe "Deployment of '$($Settings.ResourceGroupName)' Azure Function App" {
 $AzureAssets['WebAppPublishingProfile'] = [xml](Get-AzureRmWebAppPublishingProfile -WebApp $AzureAssets['WebbApps'][0])
 $AzureAssets['WebAppUserName'] = $AzureAssets['WebAppPublishingProfile'].publishData.publishProfile[0].userName
 $AzureAssets['WebAppUserPwd'] = $AzureAssets['WebAppPublishingProfile'].publishData.publishProfile[0].userPWD
-$AzureAssets['WebAppGitUrl'] = 'https://{0}:{1}@{2}.scm.azurewebsites.net:443/{2}.git' -f @(
+$AzureAssets['WebAppDeployUrl'] = 'https://{0}:{1}@{2}.scm.azurewebsites.net:443/deploy' -f @(
     [uri]::EscapeUriString($AzureAssets.WebAppUserName)
     $AzureAssets.WebAppUserPwd
     $AzureAssets.ResourceGroup.ResourceGroupName
 )
-
-# Clone the Web App Repo to the local Git Folder
-git clone $AzureAssets.WebAppGitUrl
-Push-Location $AzureAssets.ResourceGroup.ResourceGroupName
-
-# Stop the Web App for now
-$null = Stop-AzureRmWebApp -WebApp $AzureAssets['WebbApps'][0]
 
 # Create a credential profile
 Set-AWSCredential -StoreAs $Settings.AwsProfile -AccessKey $Settings.AwsAccessKey -SecretKey $Settings.AWSSecretKey
@@ -150,26 +134,14 @@ Describe "Deployment of '$($Settings.CCRepoName)' AWS CodeCommit Repo" {
     }
 }
 
-# Copy the Sample function app, commit the changes and push to AWS and Azure
+# Copy the Sample function app, commit the changes and push to AWS CodeCommit
+git clone $AWSAssets.CCRepo.CloneUrlSsh
+Push-Location $Settings.ResourceGroupName
 Copy-Item -Recurse ('{0}\*' -f $Settings.SrcDirectory) -Destination .
 git add -A
-git commit -m 'Initial Commit'
-git remote add aws $AWSAssets.CCRepo.CloneUrlSsh
+git commit -m 'Add Example Function'
 git push origin master
-git push --force aws master
 
-
-# Add AWS-CodePipeline-CodeBuild-Service-Role if ti doesn't exist
-try {
-    $AWSAssets['CPRole'] = Get-IAMRole -RoleName 'AWS-CodePipeline-CodeBuild-Service-Role' -ErrorAction 'Stop' 
-}
-catch {
-    $Params = @{
-        RoleName = 'AWS-CodePipeline-CodeBuild-Service-Role' 
-        AssumeRolePolicyDocument = '{"Version":"2012-10-17","Statement":{"Effect":"Allow","Principal":{"Service":"codepipeline.amazonaws.com"},"Action":"sts:AssumeRole"}}'
-    }
-    $AWSAssets['CPRole'] = New-IAMRole @params
-}
 
 
 ##### Diagnostics and Cleanup
@@ -178,4 +150,5 @@ $null = Start-AzureRmWebApp -WebApp $AzureAssets['WebbApps'][0]
 Remove-AzureRmResourceGroup -Name $Settings.ResourceGroupName -Force
 Remove-CCRepository -RepositoryName $Settings.CCRepoName -Force
 Pop-Location; Pop-Location
-Remove-Item -force -confirm:$false $Settings.GitDirectory
+Remove-Item -force -Recurse -confirm:$false $Settings.GitDirectory
+Remove-Item -force -Recurse $Settings.ResourceGroupName

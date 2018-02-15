@@ -9,6 +9,26 @@ namespace PBnCLambda
         public string commit;
         public bool created = false;
         public string @ref;
+
+        public string Branch
+        {
+            get
+            {
+                if (branch == null)
+                {
+                    try
+                    {
+                        branch = @ref.Split("/")[2];
+                    }
+                    catch
+                    {
+                        branch = String.Empty;
+                    }
+                }
+                return branch;
+            }
+        }
+        private string branch;
     }
 
     public class CodeCommitEventCodecommit

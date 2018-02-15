@@ -27,6 +27,7 @@ namespace PBnCLambda
 
         private static string ConfigPathEnvVar = "CC2AF_CONFIG_PATH";
         private static string ConfigPathDefault = "cc2af.yaml";
+        private static string SrcBranchDefault = "master";
         
         private static HttpClient Http = new HttpClient();
         
@@ -43,29 +44,53 @@ namespace PBnCLambda
             string commit = commitEvent.Records[0].codecommit.references[0].commit;
 
             string configPath = Environment.GetEnvironmentVariable(ConfigPathEnvVar);
-            configPath = String.IsNullOrEmpty(configPath) ? ConfigPathDefault : configPath;
+            configPath = String.IsNullOrWhiteSpace(configPath) ? ConfigPathDefault : configPath;
 
             var codeCommit = new AmazonCodeCommitClient();
             var repository = codeCommit.GetRepositoryAsync( 
-                new GetRepositoryRequest() {RepositoryName = repositoryName}).GetAwaiter().GetResult();
+                new GetRepositoryRequest() {RepositoryName = repositoryName}
+            ).GetAwaiter().GetResult();
             
             var config = GetCc2AfConfig(codeCommit, repositoryName, commit, configPath);
 
-            var deploymentPassword = ConvertFromEncryptedBase64(config.DeploymentPassword);
-            var codeCommitPassword = ConvertFromEncryptedBase64(config.CodeCommitPassword);
+            var srcBranch = String.IsNullOrWhiteSpace(config.CodeCommitBranch) ? SrcBranchDefault : config.CodeCommitBranch;
 
+            HttpResponseMessage response = null;
+            if (branch == srcBranch)
+            {
+                var deploymentPassword = ConvertFromEncryptedBase64(config.DeploymentPassword);
+                var codeCommitPassword = ConvertFromEncryptedBase64(config.CodeCommitPassword);
 
+                response = InvokeDeployment(http:               Http,
+                                                deploymentAppUrl:   config.DeploymentTriggerUrl,
+                                                deploymentAppName:  config.DeploymentAppName,
+                                                deploymentUser:     config.DeploymentUser,
+                                                deploymentPassword: deploymentPassword,
+                                                codeCommitHttpsUrl: repository.RepositoryMetadata.CloneUrlHttp,
+                                                codeCommitUser:     config.CodeCommitUser,
+                                                codeCommitPassword: codeCommitPassword);
 
-            var sns = new AmazonSimpleNotificationServiceClient();
-            var publishRequest = new PublishRequest();
-            publishRequest.Message = $"Repository: {repositoryName}; CommitId: {commit}; Branch: {branch}";
-            publishRequest.Subject = "Test SNS";
-            publishRequest.TopicArn = "arn:aws:sns:us-east-1:099223339714:TestTrigger";
-            var result = sns.PublishAsync(publishRequest).GetAwaiter().GetResult();
-            Console.WriteLine(JsonConvert.SerializeObject(result));
+                
+            }
+            WriteResults(response, configPath, config, repository, repositoryName, branch, commit, srcBranch);
         }
 
-        private string ConvertFromEncryptedBase64 (string encryptedBase64)
+        public static void WriteResults(HttpResponseMessage response, string configPath, Cc2AfConfig config, GetRepositoryResponse repository, string repositoryName, string branch, string commit, string srcBranch)
+        {
+            var dictionary = new Dictionary<string,object>(){
+                {"Response", response},
+                {"ConfigPath", configPath},
+                {"Config", config},
+                {"Repository", repository},
+                {"RepositoryName", repositoryName},
+                {"Branch", branch},
+                {"Commit", commit},
+                {"SrcBranch", srcBranch}
+            };
+            Console.WriteLine(JsonConvert.SerializeObject(dictionary));
+        }
+
+        public static string ConvertFromEncryptedBase64 (string encryptedBase64)
         {
             string result;
             using (var kms = new AmazonKeyManagementServiceClient())
@@ -81,7 +106,7 @@ namespace PBnCLambda
             return result;
         }
 
-        private Cc2AfConfig GetCc2AfConfig(AmazonCodeCommitClient codeCommit, string repositoryName, string afterCommitSpecifier, string configPath)
+        public static Cc2AfConfig GetCc2AfConfig(AmazonCodeCommitClient codeCommit, string repositoryName, string afterCommitSpecifier, string configPath)
         {
             Cc2AfConfig result;
             var differences = GetDifferences(codeCommit, repositoryName, afterCommitSpecifier);
@@ -105,7 +130,7 @@ namespace PBnCLambda
             }
             return result;
         }
-        private List<Difference> GetDifferences (AmazonCodeCommitClient codeCommit, string repositoryName, string afterCommitSpecifier)
+        public static List<Difference> GetDifferences (AmazonCodeCommitClient codeCommit, string repositoryName, string afterCommitSpecifier)
         {
             var result = new List<Difference>();
             GetDifferencesResponse response;
@@ -125,25 +150,34 @@ namespace PBnCLambda
             return result;
         }
 
-        private Difference GetConfigurationDifference(IList<Difference> differences, string configPath)
+        public static Difference GetConfigurationDifference(IList<Difference> differences, string configPath)
         {
             Difference result;
             result = differences.Where( d => d.AfterBlob.Path == configPath).FirstOrDefault();
             return result;
         }
 
-        private void InvokeDeployment(HttpClient http, string deploymentAppUrl, string deploymentUser, string deploymentPassword, string deploymentAppName, string codeCommitUser, string codeCommitPassword, string codeCommitHttpsUrl)
+        public static HttpResponseMessage InvokeDeployment(HttpClient http, string deploymentAppUrl, string deploymentUser, string deploymentPassword, string deploymentAppName, string codeCommitUser, string codeCommitPassword, string codeCommitHttpsUrl)
         {
             var auth = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{deploymentUser}:{deploymentPassword}"));
             var request = new HttpRequestMessage();
             request.Headers.Add("Authorization", $"Basic {auth}");
             request.Headers.Add("X-SITE-DEPLOYMENT-ID",deploymentAppName);
             request.RequestUri = new Uri(deploymentAppUrl);
+            request.Method = HttpMethod.Post;
 
             var builder = new UriBuilder(codeCommitHttpsUrl);
             builder.UserName = codeCommitUser;
             builder.Password = deploymentPassword;
-            
+
+            var bodyString = JsonConvert.SerializeObject(new Dictionary<string,string>(){
+                {"format", "basic"},
+                {"url", builder.ToString()}
+            });
+            var bodyBytes = Encoding.UTF8.GetBytes(bodyString);
+            request.Content = new ByteArrayContent(bodyBytes);
+
+           return http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult();
         }
     }
 }

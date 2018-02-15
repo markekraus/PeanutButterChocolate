@@ -11,5 +11,6 @@ namespace PBnCLambda
 
         public string CodeCommitUser;
         public string CodeCommitPassword;
+        public string CodeCommitBranch;
     }
 }

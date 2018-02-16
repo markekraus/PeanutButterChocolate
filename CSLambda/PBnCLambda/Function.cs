@@ -39,7 +39,7 @@ namespace PBnCLambda
             string repositoryName = commitEvent.Records[0].RepositoryName;
             string branch = commitEvent.Records[0].codecommit.references[0].Branch;
             string commit = commitEvent.Records[0].codecommit.references[0].commit;
-            string region = commitEvent.Records[0].Region;
+            string region = commitEvent.Records[0].awsRegion;
 
             string configPath = Environment.GetEnvironmentVariable(ConfigPathEnvVar);
             configPath = String.IsNullOrWhiteSpace(configPath) ? ConfigPathDefault : configPath;

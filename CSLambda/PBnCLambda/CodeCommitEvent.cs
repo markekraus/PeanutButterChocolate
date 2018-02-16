@@ -57,13 +57,6 @@ namespace PBnCLambda
                 return eventSourceARN.Split(':')[5];
             }
         }
-        public string Region
-        {
-            get
-            {
-                return eventSourceARN.Split(':')[3];
-            }
-        }
     }
 
     public class CodeCommitEvent

@@ -23,7 +23,7 @@ namespace PBnCLambda
     {
 
         private static string ConfigPathEnvVar = "CC2AF_CONFIG_PATH";
-        private static string ConfigPathDefault = "cc2af.yaml";
+        private static string ConfigPathDefault = "cc2af.yml";
         private static string SrcBranchDefault = "master";
         
         private static HttpClient Http = new HttpClient();
@@ -51,21 +51,21 @@ namespace PBnCLambda
             
             var config = GetCc2AfConfig(codeCommit, repositoryName, commit, configPath);
 
-            var srcBranch = String.IsNullOrWhiteSpace(config.CodeCommitBranch) ? SrcBranchDefault : config.CodeCommitBranch;
+            var srcBranch = String.IsNullOrWhiteSpace(config["CodeCommitBranch"]) ? SrcBranchDefault : config["CodeCommitBranch"];
 
             HttpResponseMessage response = null;
             if (branch == srcBranch)
             {
-                var deploymentPassword = ConvertFromEncryptedBase64(config.DeploymentPassword);
-                var codeCommitPassword = ConvertFromEncryptedBase64(config.CodeCommitPassword);
+                var deploymentPassword = ConvertFromEncryptedBase64(config["DeploymentPassword"]);
+                var codeCommitPassword = ConvertFromEncryptedBase64(config["CodeCommitPassword"]);
 
                 response = InvokeDeployment(http:               Http,
-                                                deploymentAppUrl:   config.DeploymentTriggerUrl,
-                                                deploymentAppName:  config.DeploymentAppName,
-                                                deploymentUser:     config.DeploymentUser,
+                                                deploymentAppUrl:   config["DeploymentTriggerUrl"],
+                                                deploymentAppName:  config["DeploymentAppName"],
+                                                deploymentUser:     config["DeploymentUser"],
                                                 deploymentPassword: deploymentPassword,
                                                 codeCommitHttpsUrl: repository.RepositoryMetadata.CloneUrlHttp,
-                                                codeCommitUser:     config.CodeCommitUser,
+                                                codeCommitUser:     config["CodeCommitUser"],
                                                 codeCommitPassword: codeCommitPassword);
 
                 
@@ -73,7 +73,7 @@ namespace PBnCLambda
             WriteResults(response, configPath, config, repository, region, repositoryName, branch, commit, srcBranch);
         }
 
-        public static void WriteResults(HttpResponseMessage response, string configPath, Cc2AfConfig config, GetRepositoryResponse repository, string region, string repositoryName, string branch, string commit, string srcBranch)
+        public static void WriteResults(HttpResponseMessage response, string configPath, Dictionary<string,string> config, GetRepositoryResponse repository, string region, string repositoryName, string branch, string commit, string srcBranch)
         {
             var dictionary = new Dictionary<string,object>(){
                 {"Response", response},
@@ -105,9 +105,9 @@ namespace PBnCLambda
             return result;
         }
 
-        public static Cc2AfConfig GetCc2AfConfig(AmazonCodeCommitClient codeCommit, string repositoryName, string afterCommitSpecifier, string configPath)
+        public static Dictionary<string,string> GetCc2AfConfig(AmazonCodeCommitClient codeCommit, string repositoryName, string afterCommitSpecifier, string configPath)
         {
-            Cc2AfConfig result;
+            Dictionary<string,string> result;
             var differences = GetDifferences(codeCommit, repositoryName, afterCommitSpecifier);
 
             var configDiff = GetConfigurationDifference(differences, configPath);
@@ -122,11 +122,9 @@ namespace PBnCLambda
                 RepositoryName = repositoryName
             }).GetAwaiter().GetResult();
 
-            var yamlDeserializer = new DeserializerBuilder().WithNamingConvention(new CamelCaseNamingConvention()).Build();
-            using (TextReader reader = new StreamReader(configBlob.Content))
-            {
-                result = yamlDeserializer.Deserialize<Cc2AfConfig>(reader);
-            }
+            var yamlDeserializer = new DeserializerBuilder().Build();
+            result = yamlDeserializer.Deserialize<Dictionary<string,string>>(new StreamReader(configBlob.Content));
+            
             return result;
         }
         public static List<Difference> GetDifferences (AmazonCodeCommitClient codeCommit, string repositoryName, string afterCommitSpecifier)
@@ -173,8 +171,8 @@ namespace PBnCLambda
             request.Method = HttpMethod.Post;
 
             var builder = new UriBuilder(codeCommitHttpsUrl);
-            builder.UserName = codeCommitUser;
-            builder.Password = deploymentPassword;
+            builder.UserName = Uri.EscapeDataString(codeCommitUser);
+            builder.Password = Uri.EscapeDataString(codeCommitPassword);
 
             var bodyString = JsonConvert.SerializeObject(new Dictionary<string,string>(){
                 {"format", "basic"},

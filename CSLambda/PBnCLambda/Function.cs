@@ -1,21 +1,18 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.IO;
-using System.Text;
-using System.Threading.Tasks;
-
+using Amazon.CodeCommit;
+using Amazon.CodeCommit.Model;
 using Amazon.KeyManagementService;
 using Amazon.KeyManagementService.Model;
 using Amazon.Lambda.Core;
-using Amazon.SimpleNotificationService;
-using Amazon.SimpleNotificationService.Model;
-using Amazon.CodeCommit;
-using Amazon.CodeCommit.Model;
 using Newtonsoft.Json;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Text;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
-using System.Net.Http;
+using Amazon;
 
 // Assembly attribute to enable the Lambda function's JSON input to be converted into a .NET class.
 [assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.Json.JsonSerializer))]
@@ -42,11 +39,12 @@ namespace PBnCLambda
             string repositoryName = commitEvent.Records[0].RepositoryName;
             string branch = commitEvent.Records[0].codecommit.references[0].Branch;
             string commit = commitEvent.Records[0].codecommit.references[0].commit;
+            string region = commitEvent.Records[0].Region;
 
             string configPath = Environment.GetEnvironmentVariable(ConfigPathEnvVar);
             configPath = String.IsNullOrWhiteSpace(configPath) ? ConfigPathDefault : configPath;
 
-            var codeCommit = new AmazonCodeCommitClient();
+            var codeCommit = new AmazonCodeCommitClient(RegionEndpoint.GetBySystemName(region));
             var repository = codeCommit.GetRepositoryAsync( 
                 new GetRepositoryRequest() {RepositoryName = repositoryName}
             ).GetAwaiter().GetResult();
@@ -72,15 +70,16 @@ namespace PBnCLambda
 
                 
             }
-            WriteResults(response, configPath, config, repository, repositoryName, branch, commit, srcBranch);
+            WriteResults(response, configPath, config, repository, region, repositoryName, branch, commit, srcBranch);
         }
 
-        public static void WriteResults(HttpResponseMessage response, string configPath, Cc2AfConfig config, GetRepositoryResponse repository, string repositoryName, string branch, string commit, string srcBranch)
+        public static void WriteResults(HttpResponseMessage response, string configPath, Cc2AfConfig config, GetRepositoryResponse repository, string region, string repositoryName, string branch, string commit, string srcBranch)
         {
             var dictionary = new Dictionary<string,object>(){
                 {"Response", response},
                 {"ConfigPath", configPath},
                 {"Config", config},
+                {"Region", region},
                 {"Repository", repository},
                 {"RepositoryName", repositoryName},
                 {"Branch", branch},
@@ -114,7 +113,7 @@ namespace PBnCLambda
             var configDiff = GetConfigurationDifference(differences, configPath);
             if (configDiff == null)
             {
-                var ex = new FileNotFoundException("Unable to find Cc2Fa Configuration YAML file.", configPath);
+                var ex = new FileNotFoundException($"Unable to find Cc2Fa Configuration YAML file '{configPath}'.", configPath);
                 throw ex;
             }
 
@@ -133,15 +132,22 @@ namespace PBnCLambda
         public static List<Difference> GetDifferences (AmazonCodeCommitClient codeCommit, string repositoryName, string afterCommitSpecifier)
         {
             var result = new List<Difference>();
+            GetDifferencesRequest request;
             GetDifferencesResponse response;
             string nextToken = String.Empty;
+            int count = 0;
             do
             {
-                response = codeCommit.GetDifferencesAsync(new GetDifferencesRequest() {
+                count++;
+                Console.WriteLine($"Count: {count}; RepositoryName: {repositoryName}; AfterCommitSpecifier: {afterCommitSpecifier}; Next: {nextToken}");
+                request = new GetDifferencesRequest(){
                     RepositoryName = repositoryName, 
-                    AfterCommitSpecifier = afterCommitSpecifier,
-                    NextToken = nextToken
-                }).GetAwaiter().GetResult();
+                    AfterCommitSpecifier = afterCommitSpecifier};
+                if (!String.IsNullOrWhiteSpace(nextToken))
+                {
+                    request.NextToken = nextToken;
+                }
+                response = codeCommit.GetDifferencesAsync(request).GetAwaiter().GetResult();
 
                 result.AddRange(response.Differences);
                 nextToken = response.NextToken;

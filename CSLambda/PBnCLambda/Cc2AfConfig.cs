@@ -1,5 +1,3 @@
-using System;
-
 namespace PBnCLambda
 {
     public class Cc2AfConfig

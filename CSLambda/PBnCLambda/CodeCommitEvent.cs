@@ -1,5 +1,4 @@
 ﻿using System;
-using Amazon.CodeCommit;
 
 namespace PBnCLambda
 {
@@ -56,6 +55,13 @@ namespace PBnCLambda
             get
             {
                 return eventSourceARN.Split(':')[5];
+            }
+        }
+        public string Region
+        {
+            get
+            {
+                return eventSourceARN.Split(':')[3];
             }
         }
     }

@@ -37,6 +37,7 @@ $Settings = @{
     CCGitUser                     = 'PBnC-Git-User'
     CCGitUserPolicyName           = 'PBnC-Git-User-{0}' -f [Guid]::NewGuid()
     CCTriggerName                 = 'TriggerAzureFunctionDeployment'
+    CCLambdaPolicyStatementId     = 'CodeCommit-PBnC-Invoke-TriggerAzureFunctionDeployment'
     LambdaName                    = 'TriggerAzureFunctionDeployment'
     LambdaHandler                 = 'PBnCLambda::PBnCLambda.Function::FunctionHandler'
     LambdaRuntime                 = 'dotnetcore2.0'
@@ -63,7 +64,7 @@ Set-AWSCredential -StoreAs $Settings.AwsProfile -AccessKey $Settings.AwsAccessKe
 Initialize-AWSDefaultConfiguration -ProfileName $Settings.AwsProfile -Region $Settings.AwsRegion 
 
 
-# Create the PBnC Resource Group and add a Function App Deployment
+# Create the Resource Group and add a Function App Deployment
 $Params = @{
     Name     = $Settings.ResourceGroupName
     Location = $Settings.ResourceGroupLocation
@@ -213,7 +214,7 @@ git push --force
 
 Describe "Initial Git Commit" {
     It "Was successful" {
-        $diffs = Get-CCDifferenceList -AfterCommitSpecifier "master" -RepositoryName $Settings.ResourceGroupName
+        $diffs = Get-CCDifferenceList -AfterCommitSpecifier "master" -RepositoryName $Settings.CCRepoName
         
         $diffs.count | Should -BeExactly 1
         $diffs[0].ChangeType | Should -BeExactly 'A'
@@ -463,7 +464,7 @@ $AzureAssets['EncryptedWebAppPassword'] = [System.Convert]::ToBase64String($encr
 # Generate the cc2af.yml which is used by the TriggerAzureFunctionDeployment Lambda 
 # to preform the deployment triggers.
 $cc2afyml = @"
-# All settings are case sensitive
+# All settings are Case Sensitive
 
 # Azure Web App Deployment Username
 DeploymentUser: {0}
@@ -503,17 +504,53 @@ git commit -m 'Add Example Function'
 git push origin master
 
 ##### Diagnostics and Cleanup
-$null = Start-AzureRmWebApp -WebApp $AzureAssets['WebbApps'][0]
-
+# One command to remove all the Azure resources
 Remove-AzureRmResourceGroup -Name $Settings.ResourceGroupName -Force
+
+# Remove the CodeCommit Repo
 Remove-CCRepository -RepositoryName $Settings.CCRepoName -Force
+# You have to clear policies from a user before deleting them
 Get-IAMUserPolicyList -UserName $Settings.CCGitUser | ForEach-Object {
     Remove-IAMUserPolicy -UserName $Settings.CCGitUser -PolicyName $_ -Force
 }
+# You have to delete the HTTPS Git Keys from the user in the AWS Web Console before you can remove the user
 Remove-IAMUser -UserName $Settings.CCGitUser -Force
-Unregister-IAMRolePolicy -PolicyArn $PolicyArns[0] -RoleName $Settings.LambdaRoleName
-Unregister-IAMRolePolicy -PolicyArn $PolicyArns[1] -RoleName $Settings.LambdaRoleName
+# Remove the custom inline policies from Lambda
+Get-LMPolicy -FunctionName $Settings.LambdaName | ForEach-Object {
+    $Policy = $_.Policy | ConvertFrom-Json
+    foreach ($Statement in $Policy.Statement) {
+        Remove-LMPermission -FunctionName $Settings.LambdaName -StatementId $Statement.Sid -Force
+    }
+}
+# Remove the lambda
+Remove-LMFunction -FunctionName $Settings.LambdaName -Force
+# Remove the Managed policies from the role
+$PolicyArns | ForEach-Object {
+    $_
+    Unregister-IAMRolePolicy -PolicyArn $_ -RoleName $Settings.LambdaRoleName
+}
+# remove the inline policies from the role
+Get-IAMRolePolicyList -RoleName $Settings.LambdaRoleName | ForEach-Object {
+    Remove-IAMRolePolicy -PolicyName $_ -RoleName $Settings.LambdaRoleName -Force
+}
+# Remove the Role
 Remove-IAMRole -RoleName $Settings.LambdaRoleName -force
+
+
+# Delete the KMS key in 7 days
+Get-KMSKeyList | 
+    ForEach-Object {Get-KMSKey -KeyId $_.keyid} | 
+    Where-Object {
+        $_.Description -eq $Settings.KMSKeyDescription -and
+        $_.Enabled     -eq $true
+    } |
+    ForEach-Object {
+        Request-KMSKeyDeletion -KeyId $_.KeyId -PendingWindowInDay 7
+        Get-KMSKey -KeyId $_.KeyId
+    }
+# Incase you change your mind run:
+# Stop-KMSKeyDeletion -KeyId $key.KeyId
+
 Pop-Location; Pop-Location
 Remove-Item -force -Recurse -confirm:$false $Settings.GitDirectory
 Remove-Item -force -Recurse $Settings.ResourceGroupName

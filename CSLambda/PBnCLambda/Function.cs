@@ -78,7 +78,17 @@ namespace PBnCLambda
         public static void WriteResults(HttpResponseMessage response, string configPath, Cc2AfConfig config, GetRepositoryResponse repository, string region, string repositoryName, string branch, string commit, string srcBranch)
         {
             var dictionary = new Dictionary<string,object>(){
-                {"Response", response},
+                // Display only fields that do not contain secrets
+                {"Response", new Dictionary<string,object>(){
+                    {"Headers", response.Headers},
+                    {"Status", response.StatusCode},
+                    {"ReasonPhrase", response.ReasonPhrase},
+                    {"Content", response.Content},
+                    {"IsSuccessStatusCode", response.IsSuccessStatusCode}}},
+                {"Resquest", new Dictionary<string,object>(){
+                    {"Uri", response.RequestMessage.RequestUri},
+                    {"Method", response.RequestMessage.Method},
+                    {"ContentHeaders", response.Content.Headers}}},
                 {"ConfigPath", configPath},
                 {"Config", config},
                 {"Region", region},

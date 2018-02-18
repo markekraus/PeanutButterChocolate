@@ -15,40 +15,70 @@ if ($PSScriptRoot) {
     $BaseDir = $PSScriptRoot
 }
 
-$AWSCreds = Get-Credential -Message 'AWS Access Key and Secret Key'
+$AWSCredentials = Get-Credential -Message 'AWS Access Key and Secret Key'
 # Settlings used by this project
 $Settings = @{
-    SrcDirectory                  = Join-Path $BaseDir src
-    # Folder under which the Git repo will be cloned 
+    SrcDirectory                  = Join-Path $BaseDir 'src'
+    # Folder under which the local Git repository will be cloned
     GitDirectory                  = 'c:\Git'
-    RsourceTemplateUrl            = 'https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/101-function-app-create-dynamic/azuredeploy.json'
+    ResourceTemplateUrl            = 
+        'https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/101-function-app-create-dynamic/azuredeploy.json'
     # Azure ResourceGroup Name
     ResourceGroupName             = 'PBnC'
     # See the -Location parameter of New-AzureRmResourceGroup for details
     ResourceGroupLocation         = "South Central US"
     # Options: Standard_LRS, Standard_GRS, Standard_RAGRS
     FunctionAppStorageAccountType = 'Standard_LRS'
-    AwsAccessKey                  = $AWSCreds.UserName
-    AWSSecretKey                  = $AWSCreds.GetNetworkCredential().Password
+    # The AWS Access Key and Secret key of the admin account used to configure AWS resources
+    AwsAccessKey                  = $AWSCredentials.UserName
+    AWSSecretKey                  = $AWSCredentials.GetNetworkCredential().Password
+    # Name of an AWS credential profile to create and use to configure AWS resources
     AwsProfile                    = 'Aws01'
+    # The AWS region in which to configure resources
     AwsRegion                     = 'us-east-2'
-    CCRepoName                    = 'PBnC'
-    CCRepoDescription             = 'Peanut Butter and Chocolate'
+    # The Name to use for the CodeCommit Repository
+    CCRepositoryName              = 'PBnC'
+    # The Description to set on the CodeCommit Repository
+    CCRepositoryDescription       = 'Peanut Butter and Chocolate'
+    # Username of an IAM user to create. 
+    # This user will granted pull access to the CodeCommit repository
+    # Its HTTPS Git credentials for AWS CodeCommit will be used in azure to pull from the repository
     CCGitUser                     = 'PBnC-Git-User'
-    CCGitUserPolicyName           = 'PBnC-Git-User-{0}' -f [Guid]::NewGuid()
+    # Name to use for the inline policy applied to the CCGitUser to allow pull access to the CodeCommit repository
+    CCGitUserPolicyName           = 'Allow-GitPull-to-CodeCommit-PBnC'
+    # Name to use for the CodeCommit repository trigger used to invoke the lambda function
     CCTriggerName                 = 'TriggerAzureFunctionDeployment'
+    # Statement ID (SID) of the lambda policy to allow the CodeCommit repository to invoke the lambda
     CCLambdaPolicyStatementId     = 'CodeCommit-PBnC-Invoke-TriggerAzureFunctionDeployment'
+    # Name of the AWS C# Lambda Function that CodeCommit will invoke to trigger Azure Web App Deployment
     LambdaName                    = 'TriggerAzureFunctionDeployment'
+    # The Handler definition used by the C# Lambda Function
     LambdaHandler                 = 'PBnCLambda::PBnCLambda.Function::FunctionHandler'
+    # The Runtime used by the AWS C# Lambda
     LambdaRuntime                 = 'dotnetcore2.0'
+    # The description to set for the AWS C# Lambda
     LambdaDescription             = 'Triggers a manual deployment of an Azure Web App from CodeCommit.'
+    # The name to give the IAM Role the AWS Lambda Function will assume when it is invoked
     LambdaRoleName                = 'TriggerAzureFunctionDeploymentRole'
+    # The description to give the IAM Role the AWS Lambda Function will assume when it is invoked
     LambdaRoleDescription         = 'Role assumed by the TriggerAzureFunctionDeployment Lambda'
+    # Manged IAM policies to apply to the IAM Role
+    LambdaRolePolicyArns          = @(
+        'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        'arn:aws:iam::aws:policy/AWSCodeCommitReadOnly'
+    )
+    # Directory containing the C# .NET Core project for the AWS Lambda Function
     LambdaSrcDirectory            = Join-Path $BaseDir 'CSLambda\PBnCLambda\'
-    LambdaTimeOut                 = 300
+    # Timeout in seconds to set for the AWS Lambda Function executions
+    LambdaTimeOut                 = 60
+    # The memory size to use for the AWS Lambda Function
     LambdaMemorySize              = 512
+    # Description to use for the AWS KMS key that will be generated
+    # This key will be used by user to encrypt string in the cc2af.yml file
+    # It will also be used by the AWS Lambda Function to decrypt those same strings
     KMSKeyDescription             = 'Key Used by TriggerAzureFunctionDeployment to manage config secrets.'
-    KMSRoleAccessPolicyName       = 'KMS-Key-Access-{0}' -f [Guid]::NewGuid()
+    # Name to set for the inline policy applied to the Lambda Role granting it access to the KMS Key
+    KMSRoleAccessPolicyName       = 'Allow-TriggerAzureFunctionDeployment-Encrypt-Decrypt'
 }
 
 # Hashtables used for storing results from commands
@@ -72,7 +102,7 @@ $Params = @{
 $AzureAssets['ResourceGroup'] = New-AzureRmResourceGroup @Params
 # This Template deploys the storage account, App Service account, and Function App.
 $Params = @{
-    TemplateUri        = $Settings.RsourceTemplateUrl
+    TemplateUri        = $Settings.ResourceTemplateUrl
     Name               = $AzureAssets['ResourceGroup'].ResourceGroupName
     ResourceGroupName  = $AzureAssets['ResourceGroup'].ResourceGroupName
     appName            = $AzureAssets['ResourceGroup'].ResourceGroupName
@@ -115,17 +145,17 @@ $AzureAssets['WebAppDeployUrl'] = 'https://{0}.scm.azurewebsites.net:443/deploy'
     $AzureAssets.ResourceGroup.ResourceGroupName
 
 $Params = @{
-    RepositoryName        = $Settings.CCRepoName
-    RepositoryDescription = $Settings.CCRepoDescription
+    RepositoryName        = $Settings.CCRepositoryName
+    RepositoryDescription = $Settings.CCRepositoryDescription
 }
-$AWSAssets['CCRepo'] = New-CCRepository @Params -ErrorVariable 'CodeCommitRepoErrors'
+$AWSAssets['CCRepository'] = New-CCRepository @Params -ErrorVariable 'CodeCommitRepositoryErrors'
 
-Describe "Deployment of '$($Settings.CCRepoName)' AWS CodeCommit Repo" {
+Describe "Deployment of '$($Settings.CCRepositoryName)' AWS CodeCommit Repository" {
     It "Was Successful." {
-        $ccrepo = Get-CCRepository -RepositoryName $Settings.CCRepoName
+        $CCRepository = Get-CCRepository -RepositoryName $Settings.CCRepositoryName
 
-        $ccrepo.RepositoryName | Should -BeExactly $Settings.CCRepoName
-        $ccrepo.RepositoryDescription | Should -BeExactly $Settings.CCRepoDescription
+        $CCRepository.RepositoryName | Should -BeExactly $Settings.CCRepositoryName
+        $CCRepository.RepositoryDescription | Should -BeExactly $Settings.CCRepositoryDescription
     }
 }
 
@@ -147,7 +177,7 @@ $PolicyDocument = @"
         "codecommit:GitPull"
       ],
       "Resource" : [
-        "$($AWSAssets.CCRepo.Arn)"
+        "$($AWSAssets.CCRepository.Arn)"
       ]
     }
   ]
@@ -165,15 +195,15 @@ $AWSAssets['IAMPolicy'] = Write-IAMUserPolicy @Params
 Describe "AWS Git User" {
     It "Was successfully created" {
         $user = Get-IAMUser -UserName $Settings.CCGitUser
-        $user.UserName | should -BeExactly $Settings.CCGitUser
+        $user.UserName | Should -BeExactly $Settings.CCGitUser
     }
     It "Has a policy attached" {
         $policy = Get-IAMUserPolicy -PolicyName $Settings.CCGitUserPolicyName -UserName $Settings.CCGitUser
         $PolicyObj = [uri]::UnescapeDataString($policy.PolicyDocument) | ConvertFrom-Json
         
-        $PolicyObj.Statement[0].Effect | should -BeExactly 'Allow'
-        $PolicyObj.Statement[0].Action[0] | should -BeExactly 'codecommit:GitPull'
-        $PolicyObj.Statement[0].Resource[0] | should -BeExactly $AWSAssets.CCRepo.Arn
+        $PolicyObj.Statement[0].Effect | Should -BeExactly 'Allow'
+        $PolicyObj.Statement[0].Action[0] | Should -BeExactly 'codecommit:GitPull'
+        $PolicyObj.Statement[0].Resource[0] | Should -BeExactly $AWSAssets.CCRepository.Arn
     }
 }
 
@@ -203,8 +233,8 @@ $Null = New-Item -ItemType Directory -Path $Settings.GitDirectory -Force -ErrorA
 Push-Location $Settings.GitDirectory
 
 # Clone the empty CodeCommit repository
-git clone $AWSAssets.CCRepo.CloneUrlSsh
-Push-Location $Settings.CCRepoName
+git clone $AWSAssets.CCRepository.CloneUrlSsh
+Push-Location $Settings.CCRepositoryName
 
 # Add an empty host.json file. This will let us confirm the Azure Web App Deployment settings are working
 '{}' | Set-Content 'host.json'
@@ -214,7 +244,7 @@ git push --force
 
 Describe "Initial Git Commit" {
     It "Was successful" {
-        $diffs = Get-CCDifferenceList -AfterCommitSpecifier "master" -RepositoryName $Settings.CCRepoName
+        $diffs = Get-CCDifferenceList -AfterCommitSpecifier "master" -RepositoryName $Settings.CCRepositoryName
         
         $diffs.count | Should -BeExactly 1
         $diffs[0].ChangeType | Should -BeExactly 'A'
@@ -223,7 +253,7 @@ Describe "Initial Git Commit" {
 }
 
 # Build the Git URL to include the Git user credentials
-$builder = [UriBuilder]::new($AWSAssets.CCRepo.CloneUrlHttp)
+$builder = [UriBuilder]::new($AWSAssets.CCRepository.CloneUrlHttp)
 $builder.UserName = $AWSAssets.CCGitUserCredentials.UserName
 $builder.Password = [uri]::EscapeDataString($AWSAssets.CCGitUserCredentials.GetNetworkCredential().Password)
 
@@ -291,11 +321,7 @@ $Params = @{
 $AWSAssets['LambdaRole'] = New-IAMRole @Params
 
 # Attach the IAM policies to the lambda IAM Role
-$PolicyArns = @(
-    'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
-    'arn:aws:iam::aws:policy/AWSCodeCommitReadOnly'
-)
-foreach ($PolicyArn in $PolicyArns) {
+foreach ($PolicyArn in $Settings.LambdaRolePolicyArns) {
     $PolicyArnsConfigured
     $Params = @{
         PolicyArn = $PolicyArn
@@ -310,13 +336,13 @@ Describe 'AWS Lambda Role' {
     }
     It "Was successfully created" {
         $role = Get-IAMRole -RoleName $Settings.LambdaRoleName
-        $policDocument = [uri]::UnescapeDataString($role.AssumeRolePolicyDocument) | ConvertFrom-Json
+        $policyDocument = [uri]::UnescapeDataString($role.AssumeRolePolicyDocument) | ConvertFrom-Json
 
-        $role.RoleName | should -BeExactly $Settings.LambdaRoleName
-        $role.Description | should -BeExactly $Settings.LambdaRoleDescription
-        $policDocument.Statement[0].Effect | should -BeExactly 'Allow'
-        $policDocument.Statement[0].Principal.Service | should -BeExactly 'lambda.amazonaws.com'
-        $policDocument.Statement[0].Action | should -BeExactly "sts:AssumeRole"
+        $role.RoleName | Should -BeExactly $Settings.LambdaRoleName
+        $role.Description | Should -BeExactly $Settings.LambdaRoleDescription
+        $policyDocument.Statement[0].Effect | Should -BeExactly 'Allow'
+        $policyDocument.Statement[0].Principal.Service | Should -BeExactly 'lambda.amazonaws.com'
+        $policyDocument.Statement[0].Action | Should -BeExactly "sts:AssumeRole"
     }
 
     It "Has the <PolicyArn> Policy attached" -TestCases @(
@@ -331,17 +357,17 @@ Describe 'AWS Lambda Role' {
 Push-Location $Settings.LambdaSrcDirectory
 dotnet publish -c release
 $PublishPath = Join-Path $pwd 'bin\release\netcoreapp2.0\publish\*'
-$Tempfile = New-TemporaryFile
-$newname = '{0}.zip' -f $Tempfile.BaseName
-$Tempfile = $Tempfile | Rename-Item -NewName $newname -PassThru
-Compress-Archive -Path $PublishPath -DestinationPath $Tempfile -Force
+$TempFile = New-TemporaryFile
+$NewName = '{0}.zip' -f $TempFile.BaseName
+$TempFile = $TempFile | Rename-Item -NewName $NewName -PassThru
+Compress-Archive -Path $PublishPath -DestinationPath $TempFile -Force
 Pop-Location
 
 # Publish the Lambda that will trigger the Azure Deployment when a CodeCommit push occurs
 $Params = @{
     FunctionName = $Settings.LambdaName
     Description  = $Settings.LambdaDescription
-    ZipFilename  = $Tempfile.FullName
+    ZipFilename  = $TempFile.FullName
     Handler      = $Settings.LambdaHandler
     Runtime      = $settings.LambdaRuntime
     Force        = $true
@@ -356,12 +382,12 @@ Describe "AWS Lambda Function" {
         $lambda = Get-LMFunction -FunctionName $Settings.LambdaName
         $config = $lambda.Configuration
 
-        $config.Role | should -BeExactly $AWSAssets.LambdaRole.Arn
-        $config.Runtime | should -BeExactly $Settings.LambdaRuntime
-        $config.FunctionName | should -BeExactly $Settings.LambdaName
-        $config.Handler | should -BeExactly $Settings.LambdaHandler
-        $config.Description | should -BeExactly $Settings.LambdaDescription
-        $config.Timeout | should -Be $Settings.LambdaTimeOut
+        $config.Role | Should -BeExactly $AWSAssets.LambdaRole.Arn
+        $config.Runtime | Should -BeExactly $Settings.LambdaRuntime
+        $config.FunctionName | Should -BeExactly $Settings.LambdaName
+        $config.Handler | Should -BeExactly $Settings.LambdaHandler
+        $config.Description | Should -BeExactly $Settings.LambdaDescription
+        $config.Timeout | Should -Be $Settings.LambdaTimeOut
     }
 }
 
@@ -373,7 +399,7 @@ Describe "AWS KMS Key" {
     It "Was successfully created" {
         $key = Get-KMSKey -KeyId $AWSAssets.KMSKey.KeyId
 
-        $key.Description | should -BeExactly $Settings.KMSKeyDescription
+        $key.Description | Should -BeExactly $Settings.KMSKeyDescription
     }
 }
 
@@ -403,48 +429,63 @@ $AWSAssets['KMSRoleAccessPolicy'] =  Write-IAMRolePolicy @Params
 Describe "Lambda Role KMS Access Policy" {
     It "Was successfully created" {
         $policy = Get-IAMRolePolicy -RoleName $Settings.LambdaRoleName -PolicyName $Settings.KMSRoleAccessPolicyName
-        $policydoc = [uri]::UnEscapeDataString($policy.PolicyDocument) | ConvertFrom-Json
+        $policyDocument = [uri]::UnEscapeDataString($policy.PolicyDocument) | ConvertFrom-Json
 
-        $policy.RoleName | should -BeExactly $Settings.LambdaRoleName
-        $policy.PolicyName | should -BeExactly $Settings.KMSRoleAccessPolicyName
-        $policydoc.Statement.Action.Count | should -be 2
-        "kms:Encrypt", "kms:Decrypt" | should -BeIn $policydoc.Statement.Action
-        $policydoc.Statement.Effect | should -BeExactly 'Allow'
-        $policydoc.Statement.Resource | should -BeExactly $AWSAssets.KMSKey.Arn
+        $policy.RoleName | Should -BeExactly $Settings.LambdaRoleName
+        $policy.PolicyName | Should -BeExactly $Settings.KMSRoleAccessPolicyName
+        $policyDocument.Statement.Action.Count | Should -be 2
+        "kms:Encrypt", "kms:Decrypt" | Should -BeIn $policyDocument.Statement.Action
+        $policyDocument.Statement.Effect | Should -BeExactly 'Allow'
+        $policyDocument.Statement.Resource | Should -BeExactly $AWSAssets.KMSKey.Arn
     }
 }
 
-# Grant the CodeCommit Repo access to execute the Lambda function
+# Grant the CodeCommit Repository access to execute the Lambda function
 $Params = @{
     Action       = 'lambda:InvokeFunction'
     FunctionName = $Settings.LambdaName 
     Principal    = 'codecommit.amazonaws.com'
-    SourceArn    = $AWSAssets.CCRepo.Arn
-    StatementId  = '{0}-{1}' -f $Settings.LambdaName, [Guid]::NewGuid()
+    SourceArn    = $AWSAssets.CCRepository.Arn
+    StatementId  = $Settings.CCLambdaPolicyStatementId
 }
 $AWSAssets['CCLambdaPermission'] = Add-LMPermission @Params -Force
+
+Describe "Lambda policy" {
+    It "Was successfully added" {
+        $policy = Get-LMPolicy -FunctionName $Settings.LambdaName | 
+            Select-Object -ExpandProperty Policy |
+            ConvertFrom-Json
+        $statement = $policy.Statement[0]
+
+        $policy.Statement.Count | Should -Be 1
+        $statement.Sid | Should -BeExactly $Settings.CCLambdaPolicyStatementId
+        $statement.Effect | Should -BeExactly 'Allow'
+        $statement.Principal.Service | Should -BeExactly 'codecommit.amazonaws.com'
+        $statement.Condition.ArnLike.'AWS:SourceArn' | Should -BeExactly $AWSAssets.CCRepository.Arn
+    }
+}
  
 # Add Trigger to the CodeCommit Repository to Execute the Lambda function
-$repoTrigger = [Amazon.CodeCommit.Model.RepositoryTrigger]::New()
-$repoTrigger.Branches.Add('master')
-$repoTrigger.DestinationArn = $AWSAssets.PublishedLambda.FunctionArn
-$repoTrigger.Events = 'all'
-$repoTrigger.Name = $Settings.CCTriggerName
+$repositoryTrigger = [Amazon.CodeCommit.Model.RepositoryTrigger]::New()
+$repositoryTrigger.Branches.Add('master')
+$repositoryTrigger.DestinationArn = $AWSAssets.PublishedLambda.FunctionArn
+$repositoryTrigger.Events = 'all'
+$repositoryTrigger.Name = $Settings.CCTriggerName
 $Params = @{
-    RepositoryName = $Settings.CCRepoName
-    Trigger        = $repoTrigger 
+    RepositoryName = $Settings.CCRepositoryName
+    Trigger        = $repositoryTrigger 
     Force          = $true
 }
 $AWSAssets['CCRepositoryTrigger'] =  Set-CCRepositoryTrigger @Params
 
 describe "CodeCommit Repository Trigger" {
     it "Was successfully added." {
-        $triggers = Get-CCRepositoryTrigger -RepositoryName $Settings.CCRepoName
+        $triggers = Get-CCRepositoryTrigger -RepositoryName $Settings.CCRepositoryName
 
-        $triggers.Triggers[0].Branches.Count | should -be 1
-        $triggers.Triggers[0].Branches[0] | should -BeExactly 'master'
-        $triggers.Triggers[0].DestinationArn | should -BeExactly $AWSAssets.PublishedLambda.FunctionArn
-        $triggers.Triggers[0].Name | should -BeExactly $Settings.CCTriggerName
+        $triggers.Triggers[0].Branches.Count | Should -be 1
+        $triggers.Triggers[0].Branches[0] | Should -BeExactly 'master'
+        $triggers.Triggers[0].DestinationArn | Should -BeExactly $AWSAssets.PublishedLambda.FunctionArn
+        $triggers.Triggers[0].Name | Should -BeExactly $Settings.CCTriggerName
     }
 }
 
@@ -463,7 +504,7 @@ $AzureAssets['EncryptedWebAppPassword'] = [System.Convert]::ToBase64String($encr
 
 # Generate the cc2af.yml which is used by the TriggerAzureFunctionDeployment Lambda 
 # to preform the deployment triggers.
-$cc2afyml = @"
+$YamlConfigurationFile = @"
 # All settings are Case Sensitive
 
 # Azure Web App Deployment Username
@@ -495,7 +536,7 @@ CodeCommitBranch: master
     $AWSAssets.CCGitUserCredentials.UserName
     $AWSAssets.EncryptedGitPassword
 )
-$cc2afyml | Set-Content 'cc2af.yml' -Encoding UTF8
+$YamlConfigurationFile | Set-Content 'cc2af.yml' -Encoding UTF8
 
 # Copy the Sample function app, commit, then push
 Copy-Item -Recurse ('{0}\*' -f $Settings.SrcDirectory) -Destination .
@@ -504,11 +545,12 @@ git commit -m 'Add Example Function'
 git push origin master
 
 ##### Diagnostics and Cleanup
+<#
 # One command to remove all the Azure resources
 Remove-AzureRmResourceGroup -Name $Settings.ResourceGroupName -Force
 
-# Remove the CodeCommit Repo
-Remove-CCRepository -RepositoryName $Settings.CCRepoName -Force
+# Remove the CodeCommit Repository
+Remove-CCRepository -RepositoryName $Settings.CCRepositoryName -Force
 # You have to clear policies from a user before deleting them
 Get-IAMUserPolicyList -UserName $Settings.CCGitUser | ForEach-Object {
     Remove-IAMUserPolicy -UserName $Settings.CCGitUser -PolicyName $_ -Force
@@ -539,7 +581,7 @@ Remove-IAMRole -RoleName $Settings.LambdaRoleName -force
 
 # Delete the KMS key in 7 days
 Get-KMSKeyList | 
-    ForEach-Object {Get-KMSKey -KeyId $_.keyid} | 
+    ForEach-Object {Get-KMSKey -KeyId $_.KeyId} | 
     Where-Object {
         $_.Description -eq $Settings.KMSKeyDescription -and
         $_.Enabled     -eq $true
@@ -551,6 +593,8 @@ Get-KMSKeyList |
 # Incase you change your mind run:
 # Stop-KMSKeyDeletion -KeyId $key.KeyId
 
+# Clean up local 
 Pop-Location; Pop-Location
 Remove-Item -force -Recurse -confirm:$false $Settings.GitDirectory
 Remove-Item -force -Recurse $Settings.ResourceGroupName
+#>

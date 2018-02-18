@@ -71,10 +71,11 @@ $Settings = @{
     )
     # Directory containing the C# .NET Core project for the AWS Lambda Function
     LambdaSrcDirectory            = Join-Path $BaseDir 'CSLambda\PBnCLambda\'
+    # In testing, ths Lambda takes 2-5 seconds to run and consumes about 90MB of RAM
     # Timeout in seconds to set for the AWS Lambda Function executions
     LambdaTimeOut                 = 60
     # The memory size to use for the AWS Lambda Function
-    LambdaMemorySize              = 512
+    LambdaMemorySize              = 128
     # Description to use for the AWS KMS key that will be generated
     # This key will be used by user to encrypt string in the cc2af.yml file
     # It will also be used by the AWS Lambda Function to decrypt those same strings
@@ -146,6 +147,8 @@ $AzureAssets['WebAppUserPwd'] = $AzureAssets['WebAppPublishingProfile'].publishD
 $AzureAssets['WebAppDeployUrl'] = 'https://{0}.scm.azurewebsites.net:443/deploy' -f 
     $AzureAssets.ResourceGroup.ResourceGroupName
 
+
+# Create the AWS CodeCommit Repository
 $Params = @{
     RepositoryName        = $Settings.CCRepositoryName
     RepositoryDescription = $Settings.CCRepositoryDescription
@@ -210,7 +213,7 @@ Describe "AWS Git User" {
 }
 
 # At this point we need to use th AWS web console to generate 
-$ConsoleUrl = 'https://console.aws.amazon.com/iam/home?region={0}#/users/{1}section=security_credentials' -f 
+$ConsoleUrl = 'https://console.aws.amazon.com/iam/home?region={0}#/users/{1}?section=security_credentials' -f 
     $Settings.AwsRegion, $Settings.CCGitUser
 Write-Host @"
 
@@ -229,6 +232,7 @@ Once you generate the HTTPS Git credentials for AWS CodeCommit, enter the genera
 $AWSAssets['CCGitUserCredentials'] = Get-Credential -Message "HTTPS Git credentials for AWS CodeCommit"
 
 # Before continuing, make sure you have configured an SSH key for AWS CodeCommit on your admin account
+# https://docs.aws.amazon.com/codecommit/latest/userguide/setting-up-ssh-windows.html
 
 # Create the Git Directory and change location to it
 $Null = New-Item -ItemType Directory -Path $Settings.GitDirectory -Force -ErrorAction 'SilentlyContinue'
@@ -377,7 +381,8 @@ $Params = @{
     Timeout      = $Settings.LambdaTimeOut
     MemorySize   = $Settings.LambdaMemorySize
 }
-$AWSAssets['PublishedLambda'] = Publish-LMFunction @Params 
+$AWSAssets['PublishedLambda'] = Publish-LMFunction @Params
+Remove-Item -Path $TempFile -Force
 
 Describe "AWS Lambda Function" {
     It "was published successfully" {
@@ -405,6 +410,7 @@ Describe "AWS KMS Key" {
     }
 }
 
+# Grant the IAM Role access to the KMS Key so it can decrypt
 $PolicyDocument = @"
 {
     "Version": "2012-10-17",
@@ -466,7 +472,7 @@ Describe "Lambda policy" {
         $statement.Condition.ArnLike.'AWS:SourceArn' | Should -BeExactly $AWSAssets.CCRepository.Arn
     }
 }
- 
+
 # Add Trigger to the CodeCommit Repository to Execute the Lambda function
 $repositoryTrigger = [Amazon.CodeCommit.Model.RepositoryTrigger]::New()
 $repositoryTrigger.Branches.Add('master')
@@ -583,10 +589,12 @@ function ConvertFrom-Base64KMSEncryptedString {
 
 
 # Encrypt the CodeCommit Git User Password and base64 encode it
-$AWSAssets['EncryptedGitPassword'] = $AWSAssets.CCGitUserCredentials.GetNetworkCredential().password | ConvertTo-Base64KMSEncryptedString
+$AWSAssets['EncryptedGitPassword'] = $AWSAssets.CCGitUserCredentials.GetNetworkCredential().password | 
+    ConvertTo-Base64KMSEncryptedString -KeyId $AWSAssets.KMSKey.KeyId
 
 # Encrypt the CodeCommit Git User Password and base64 encode it
-$AzureAssets['EncryptedWebAppPassword'] = $AzureAssets.WebAppUserPwd | ConvertTo-Base64KMSEncryptedString
+$AzureAssets['EncryptedWebAppPassword'] = $AzureAssets.WebAppUserPwd | 
+    ConvertTo-Base64KMSEncryptedString -KeyId $AWSAssets.KMSKey.KeyId
 
 # Generate the cc2af.yml which is used by the TriggerAzureFunctionDeployment Lambda 
 # to preform the deployment triggers.
@@ -630,6 +638,107 @@ git add -A
 git commit -m 'Add Example Function'
 git push origin master
 
+# Wait several minutes for the deployment to complete.
+# In testing this takes anywhere from a few seconds to a few minutes
+
+$Params = @{
+    ResourceGroupName = $Settings.ResourceGroupName
+    ResourceType      = 'Microsoft.Web/sites/functions'
+    ResourceName      = $Settings.ResourceGroupName
+    ApiVersion        = '2015-08-01'
+}
+$AzureAssets['AzureFunctions'] = Get-AzureRmResource @Params
+$AzureAssets['AzureFunctionCode'] = [Convert]::ToBase64String(
+    [System.Text.Encoding]::UTF8.GetBytes(
+        ('{0}:{1}' -f $AzureAssets.WebAppUserName, $AzureAssets.WebAppUserPwd)
+    )
+)
+
+$KuduHeaders = @{
+    'Authorization' = 'Basic {0}' -f $AzureAssets.AzureFunctionCode
+    'X-SITE-DEPLOYMENT-ID' = $Settings.ResourceGroupName
+}
+$params = @{
+    uri = 'https://{0}.scm.azurewebsites.net/deployments' -f $Settings.ResourceGroupName
+    Headers = $KuduHeaders
+    Method = 'GET'
+}
+$AzureAssets['FunctionDeployments'] = Invoke-RestMethod @Params
+
+$AWSAssets['LogGroupName'] = ('/aws/lambda/{0}' -f $Settings.LambdaName)
+$AWSAssets['CloudWatchLogs'] = Get-CWLLogStream -LogGroupName $AWSAssets.LogGroupName -Descending $true
+
+Describe "CodeCommit Deployment to Azure Functions" {
+    It "Added a new function" {
+        $functions = $AzureAssets.AzureFunctions
+        $functions | Should -Not -BeNullOrEmpty
+        $functions | Should -HaveCount 1
+        # The name is determined by the function folder name in the src folder
+        $functions[0].Properties.name | Should -BeExactly 'PBnC'
+        $functions[0].Properties.config.disabled | Should -BeFalse
+        $functions[0].Properties.config.bindings | Should -HaveCount 2
+        $functions[0].Properties.config.bindings[0].authLevel | Should -BeExactly 'function'
+        $functions[0].Properties.config.bindings[0].direction | Should -BeExactly 'in'
+        $functions[0].Properties.config.bindings[0].type | Should -BeExactly 'httpTrigger'
+        $functions[0].Properties.config.bindings[0].name | Should -BeExactly 'req'
+        $functions[0].Properties.config.bindings[1].type | Should -BeExactly 'http'
+        $functions[0].Properties.config.bindings[1].direction | Should -BeExactly 'out'
+        $functions[0].Properties.config.bindings[1].name | Should -BeExactly 'res'
+    }
+    It "Was a successful deployment" {
+        $deployments = $AzureAssets.FunctionDeployments
+        $deployments | Should -HaveCount 2
+        $deployment = $deployments[0]
+        $deployment.active | Should -BeTrue
+        $deployment.complete | Should -BeTrue
+        $deployment.deployer | Should -Be ('git-codecommit.{0}.amazonaws.com' -f $Settings.AwsRegion)
+        $deployment.message | Should -Match 'Add Example Function'
+    }
+}
+
+# Display the Azure Web App Deployment Log and AWS CloudWatch Log for the Lambda
+'----------------------- Azure Web App Deployment Log -----------------------------------'
+Invoke-RestMethod -Headers $KuduHeaders -uri $AzureAssets.FunctionDeployments[0].log_url
+'----------------------------------------------------------------------------------------'
+' '
+' '
+'----------------------- AWS CloudWatch Log for Lambda ----------------------------------'
+Get-CWLLogEvent -LogGroupName $AWSAssets.LogGroupName -LogStreamName $AWSAssets.CloudWatchLogs[0].LogStreamName |
+    Select-Object -ExpandProperty Events |
+    ForEach-Object {
+        $_.IngestionTime.ToString()
+        $_.message
+    }
+'----------------------------------------------------------------------------------------'
+
+# We need to grab the function level key for Azure Function so we can test it
+$Params = @{
+    Uri = "https://{0}.scm.azurewebsites.net/api/functions/admin/masterkey" -f $Settings.ResourceGroupName
+    Headers = $KuduHeaders + @{"If-Match"="*"} 
+}
+$maskterkey = Invoke-RestMethod @Params
+$Params = @{
+    Uri = "https://{0}.azurewebsites.net/admin/functions/{1}/KEYS?CODE={2}" -f 
+        $Settings.ResourceGroupName, 'PBnC', $maskterkey.masterKey
+    #Headers = $KuduHeaders + @{"If-Match"="*"} 
+}
+$FunctionKeys = Invoke-RestMethod @Params
+
+# Finally, execute the azure function and ensure the code we dployed to AWS CodeCommit works
+$AzureAssets['AzureFunctionUrl'] = 'https://{0}.azurewebsites.net/api/{1}?code={2}&name=Mark%20Kraus' -f 
+    $Settings.ResourceGroupName, 'PBnC', $FunctionKeys.keys[0].value
+$AzureAssets['AzureFunctionResult'] = Invoke-RestMethod -Uri $AzureAssets.AzureFunctionUrl
+
+'--------------------------- Azure Function Result --------------------------------------'
+$AzureAssets.AzureFunctionResult
+'----------------------------------------------------------------------------------------'
+
+Describe "Peanut Butter" {
+    It "Has been put in the Chocolate!!" {
+        $AzureAssets.AzureFunctionResult | Should -Match 'Mark Kraus put Peanut Butter in the Chocolate!'
+    }
+}
+# to test the function you will need to use the Azure web portal to get the function url
 
 ##### Diagnostics and Cleanup
 <#
@@ -654,7 +763,7 @@ Get-LMPolicy -FunctionName $Settings.LambdaName | ForEach-Object {
 # Remove the lambda
 Remove-LMFunction -FunctionName $Settings.LambdaName -Force
 # Remove the Managed policies from the role
-$PolicyArns | ForEach-Object {
+$Settings.LambdaRolePolicyArns | ForEach-Object {
     $_
     Unregister-IAMRolePolicy -PolicyArn $_ -RoleName $Settings.LambdaRoleName
 }

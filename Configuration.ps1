@@ -6,15 +6,17 @@ Import-Module AzureRM -Force -MinimumVersion 5.2.0
 Install-Module -Name AWSPowerShell -Scope CurrentUser -Force -MinimumVersion 3.3.232.0
 Import-Module -MinimumVersion 3.3.232.0 -Name AWSPowerShell
 
-# Install and Import Pester
-Install-Module Pester -Scope CurrentUser -Force -MinimumVersion 4.1.1
-Import-Module Pester -Force -MinimumVersion 4.1.1
+# Install and Import Pester 4.2.0
+# This script makes use of features only available in Pest 4.2.0 and up
+Install-Module Pester -Scope CurrentUser -Force -MinimumVersion 4.2.0
+Import-Module Pester -Force -MinimumVersion 4.2.0
 
 $BaseDir = $PWD
 if ($PSScriptRoot) { 
     $BaseDir = $PSScriptRoot
 }
 
+# Prompt for the AWS Admin access Key and Secret Key
 $AWSCredentials = Get-Credential -Message 'AWS Access Key and Secret Key'
 # Settlings used by this project
 $Settings = @{
@@ -113,27 +115,27 @@ $AzureAssets['Deployment'] = New-AzureRmResourceGroupDeployment @Params -ErrorVa
 # Validate that the deployment was successful
 Describe "Deployment of '$($Settings.ResourceGroupName)' Azure Function App" {
     It "Was Successful." {
-        $DeploymentErrors.Count | Should -Be 0
-        $AzureAssets['Deployment'].ProvisioningState | Should -BeExactly 'Succeeded'
+        $DeploymentErrors | Should -HaveCount 0
+        $AzureAssets.Deployment.ProvisioningState | Should -BeExactly 'Succeeded'
     }
     It "Has a Storage Account." {
         $AzureAssets['Storage'] = Get-AzureRmStorageAccount -ResourceGroupName $AzureAssets['ResourceGroup'].ResourceGroupName
 
-        $AzureAssets['Storage'].ProvisioningState | Should -BeExactly 'Succeeded'
+        $AzureAssets.Storage.ProvisioningState | Should -BeExactly 'Succeeded'
     }
     It "Has an App Service Plan." {
         $AzureAssets['AppService'] = Get-AzureRmAppServicePlan -ResourceGroupName $AzureAssets['ResourceGroup'].ResourceGroupName
 
-        $AzureAssets['AppService'].Status | Should -BeExactly 'Ready'
-        $AzureAssets['AppService'].NumberOfSites | Should -Be 1
+        $AzureAssets.AppService.Status | Should -BeExactly 'Ready'
+        $AzureAssets.AppService.NumberOfSites | Should -Be 1
     }
     It "Has a Web App." {
         $AzureAssets['WebbApps'] = Get-AzureRmWebApp -ResourceGroupName $AzureAssets['ResourceGroup'].ResourceGroupName
 
-        $AzureAssets['WebbApps'].Count | Should -Be 1
-        $AzureAssets['WebbApps'][0].State | Should -BeExactly 'Running'
-        $AzureAssets['WebbApps'][0].SiteName | Should -Be $AzureAssets['ResourceGroup'].ResourceGroupName
-        $AzureAssets['WebbApps'][0].ServerFarmId | Should -Be $AzureAssets['AppService'].Id
+        $AzureAssets.WebbApps | Should -HaveCount 1
+        $AzureAssets.WebbApps[0].State | Should -BeExactly 'Running'
+        $AzureAssets.WebbApps[0].SiteName | Should -Be $AzureAssets['ResourceGroup'].ResourceGroupName
+        $AzureAssets.WebbApps[0].ServerFarmId | Should -Be $AzureAssets['AppService'].Id
     }
 }
 
@@ -246,7 +248,7 @@ Describe "Initial Git Commit" {
     It "Was successful" {
         $diffs = Get-CCDifferenceList -AfterCommitSpecifier "master" -RepositoryName $Settings.CCRepositoryName
         
-        $diffs.count | Should -BeExactly 1
+        $diffs | Should -HaveCount 1
         $diffs[0].ChangeType | Should -BeExactly 'A'
         $diffs[0].AfterBlob.Path | Should -BeExactly 'host.json'
     }
@@ -288,12 +290,12 @@ Describe "Azure Web App Deployment Settings" {
 
         $Result.Properties.repoUrl | Should -BeExactly $builder.ToString()
         $Result.Properties.branch | Should -BeExactly 'master'
-        $Result.Properties.isManualIntegration | Should -BeExactly $true
-        $Result.Properties.isMercurial | Should -BeExactly $false
-        $Result.Properties.deploymentRollbackEnabled | Should -BeExactly $false
+        $Result.Properties.isManualIntegration | Should -BeTrue
+        $Result.Properties.isMercurial | Should -BeFalse
+        $Result.Properties.deploymentRollbackEnabled | Should -BeFalse
     }
     It "Successfully provisioned from AWS CodeCommit" {
-        $AzureAssets['WebAppDeploymentSettingsGet'].Properties.provisioningState | Should -BeExactly 'Succeeded'
+        $AzureAssets.WebAppDeploymentSettingsGet.Properties.provisioningState | Should -BeExactly 'Succeeded'
     }
 }
 
@@ -346,10 +348,10 @@ Describe 'AWS Lambda Role' {
     }
 
     It "Has the <PolicyArn> Policy attached" -TestCases @(
-        foreach($PolicyArn in $PolicyArns){ @{PolicyArn = $PolicyArn }}
+        foreach($PolicyArn in $Settings.LambdaRolePolicyArns){ @{PolicyArn = $PolicyArn }}
     ) {
         param($PolicyArn)
-        $PolicyArn | Should -BeIn $AWSAssets['LambdaAttachedPolicies'].PolicyArn
+        $AWSAssets.LambdaAttachedPolicies.PolicyArn | Should -Contain $PolicyArn
     }
 }
 
@@ -433,7 +435,7 @@ Describe "Lambda Role KMS Access Policy" {
 
         $policy.RoleName | Should -BeExactly $Settings.LambdaRoleName
         $policy.PolicyName | Should -BeExactly $Settings.KMSRoleAccessPolicyName
-        $policyDocument.Statement.Action.Count | Should -be 2
+        $policyDocument.Statement.Action | Should -HaveCount 2
         "kms:Encrypt", "kms:Decrypt" | Should -BeIn $policyDocument.Statement.Action
         $policyDocument.Statement.Effect | Should -BeExactly 'Allow'
         $policyDocument.Statement.Resource | Should -BeExactly $AWSAssets.KMSKey.Arn
@@ -457,7 +459,7 @@ Describe "Lambda policy" {
             ConvertFrom-Json
         $statement = $policy.Statement[0]
 
-        $policy.Statement.Count | Should -Be 1
+        $policy.Statement | Should -HaveCount 1
         $statement.Sid | Should -BeExactly $Settings.CCLambdaPolicyStatementId
         $statement.Effect | Should -BeExactly 'Allow'
         $statement.Principal.Service | Should -BeExactly 'codecommit.amazonaws.com'
@@ -482,25 +484,109 @@ describe "CodeCommit Repository Trigger" {
     it "Was successfully added." {
         $triggers = Get-CCRepositoryTrigger -RepositoryName $Settings.CCRepositoryName
 
-        $triggers.Triggers[0].Branches.Count | Should -be 1
+        $triggers.Triggers[0].Branches | Should -HaveCount 1
         $triggers.Triggers[0].Branches[0] | Should -BeExactly 'master'
         $triggers.Triggers[0].DestinationArn | Should -BeExactly $AWSAssets.PublishedLambda.FunctionArn
         $triggers.Triggers[0].Name | Should -BeExactly $Settings.CCTriggerName
     }
 }
 
+# A function to encrypt a string with KMS and then return a base64 encoded string representation
+function ConvertTo-Base64KMSEncryptedString {
+    [CmdletBinding()]
+    param (
+        [Parameter(
+            Mandatory = $true,
+            ValueFromPipeline = $true
+        )]
+        [String[]]
+        $String,
+
+        [Parameter(
+            Mandatory = $true
+        )]
+        [string]
+        $KeyId,
+
+        [hashtable]$EncryptionContext
+    )
+    
+    process {
+        foreach ($SourceString in $String) {
+            $byteArray = [System.Text.Encoding]::UTF8.GetBytes($SourceString)
+            $stringStream = [System.IO.MemoryStream]::new($ByteArray)
+            try {
+                $Params = @{
+                    KeyId = $KeyId 
+                    Plaintext = $stringStream 
+                    ErrorAction = 'Stop'
+                }
+                if ($EncryptionContext) {
+                    $Params['EncryptionContext'] = $EncryptionContext
+                }
+                $KMSResult = Invoke-KMSEncrypt @Params
+
+                [System.Convert]::ToBase64String($KMSResult.CiphertextBlob.ToArray())
+            }
+            finally {
+                if ($stringStream) { $stringStream.Dispose() }
+                if ($KMSResult.CiphertextBlob) { $KMSResult.CiphertextBlob.Dispose() }
+            }
+        }
+    }
+}
+
+# A function to decrypt a base64 representation of a string encrypted by KMS.
+function ConvertFrom-Base64KMSEncryptedString {
+    [CmdletBinding()]
+    param (
+        [Parameter(
+            Mandatory = $true,
+            ValueFromPipeline = $true
+        )]
+        [String[]]
+        $EncryptedString,
+
+        [hashtable]$EncryptionContext
+    )
+    
+    process {
+        foreach ($SourceString in $EncryptedString) {
+            try{
+                $byteArray = [System.Convert]::FromBase64String($SourceString)
+            }
+            Catch {
+                Write-Error -ErrorRecord $_
+                continue
+            }
+            $stringStream = [System.IO.MemoryStream]::new($byteArray)
+            try {
+                $Params = @{
+                    CiphertextBlob = $stringStream 
+                    ErrorAction = 'Stop'
+                }
+                if ($EncryptionContext) {
+                    $Params['EncryptionContext'] = $EncryptionContext
+                }
+                $KMSResult = Invoke-KMSDecrypt @Params
+
+                $reader = [System.IO.StreamReader]::new($KMSResult.Plaintext)
+                $reader.ReadToEnd()
+            }
+            finally {
+                if ($reader){ $reader.Dispose() }
+                if ($stringStream){ $stringStream.Dispose() }
+            }
+        }
+    }
+}
+
 
 # Encrypt the CodeCommit Git User Password and base64 encode it
-$byteArray = [System.Text.Encoding]::UTF8.GetBytes($AWSAssets.CCGitUserCredentials.GetNetworkCredential().password)
-$memoryStream = [System.IO.MemoryStream]::new($ByteArray)
-$encryptedStream = (Invoke-KMSEncrypt -KeyId $AWSAssets.KMSKey.KeyId -Plaintext $memoryStream).CiphertextBlob
-$AWSAssets['EncryptedGitPassword'] = [System.Convert]::ToBase64String($encryptedStream.ToArray())
+$AWSAssets['EncryptedGitPassword'] = $AWSAssets.CCGitUserCredentials.GetNetworkCredential().password | ConvertTo-Base64KMSEncryptedString
 
 # Encrypt the CodeCommit Git User Password and base64 encode it
-$byteArray = [System.Text.Encoding]::UTF8.GetBytes($AzureAssets.WebAppUserPwd)
-$memoryStream = [System.IO.MemoryStream]::new($ByteArray)
-$encryptedStream = (Invoke-KMSEncrypt -KeyId $AWSAssets.KMSKey.KeyId -Plaintext $memoryStream).CiphertextBlob
-$AzureAssets['EncryptedWebAppPassword'] = [System.Convert]::ToBase64String($encryptedStream.ToArray())
+$AzureAssets['EncryptedWebAppPassword'] = $AzureAssets.WebAppUserPwd | ConvertTo-Base64KMSEncryptedString
 
 # Generate the cc2af.yml which is used by the TriggerAzureFunctionDeployment Lambda 
 # to preform the deployment triggers.
@@ -543,6 +629,7 @@ Copy-Item -Recurse ('{0}\*' -f $Settings.SrcDirectory) -Destination .
 git add -A
 git commit -m 'Add Example Function'
 git push origin master
+
 
 ##### Diagnostics and Cleanup
 <#

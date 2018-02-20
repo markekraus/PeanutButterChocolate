@@ -30,8 +30,9 @@ $Settings = @{
     SrcDirectory                  = Join-Path $BaseDir 'src'
     # Folder under which the local Git repository will be cloned
     GitDirectory                  = 'c:\Git'
+    # URL to the Azure Resource Template used to deploy the Azure Function Web App
     ResourceTemplateUrl            = 
-        'https://raw.githubusercontent.com/Azure/azure-quickstart-templates/master/101-function-app-create-dynamic/azuredeploy.json'
+        'https://raw.githubusercontent.com/Azure/azure-quickstart-templates/57f091bc3c7d298e102ab092a1a25399b49d77f3/101-function-app-create-dynamic/azuredeploy.json'
     # Azure ResourceGroup Name
     ResourceGroupName             = 'PBnC'
     # See the -Location parameter of New-AzureRmResourceGroup for details

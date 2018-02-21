@@ -33,8 +33,10 @@ $Settings = @{
     # URL to the Azure Resource Template used to deploy the Azure Function Web App
     ResourceTemplateUrl            = 
         'https://raw.githubusercontent.com/Azure/azure-quickstart-templates/57f091bc3c7d298e102ab092a1a25399b49d77f3/101-function-app-create-dynamic/azuredeploy.json'
-    # Azure ResourceGroup Name
+    # New Azure Resource Group Name under which to deploy the Azure Web App and Storage
     ResourceGroupName             = 'PBnC'
+    # The name to use for the Azure Function Web App
+    AppName                       = 'PBnC'
     # See the -Location parameter of New-AzureRmResourceGroup for details
     ResourceGroupLocation         = "South Central US"
     # Options: Standard_LRS, Standard_GRS, Standard_RAGRS
@@ -116,9 +118,9 @@ $AzureAssets['ResourceGroup'] = New-AzureRmResourceGroup @Params
 # This Template deploys the storage account, App Service account, and Function App.
 $Params = @{
     TemplateUri        = $Settings.ResourceTemplateUrl
-    Name               = $AzureAssets['ResourceGroup'].ResourceGroupName
-    ResourceGroupName  = $AzureAssets['ResourceGroup'].ResourceGroupName
-    appName            = $AzureAssets['ResourceGroup'].ResourceGroupName
+    Name               = $Settings.ResourceGroupName
+    ResourceGroupName  = $Settings.ResourceGroupName
+    appName            = $Settings.AppName
     storageAccountType = $Settings.FunctionAppStorageAccountType
 }
 $AzureAssets['Deployment'] = New-AzureRmResourceGroupDeployment @Params -ErrorVariable 'DeploymentErrors' 
@@ -130,22 +132,22 @@ Describe "Deployment of '$($Settings.ResourceGroupName)' Azure Function App" {
         $AzureAssets.Deployment.ProvisioningState | Should -BeExactly 'Succeeded'
     }
     It "Has a Storage Account." {
-        $AzureAssets['Storage'] = Get-AzureRmStorageAccount -ResourceGroupName $AzureAssets['ResourceGroup'].ResourceGroupName
+        $AzureAssets['Storage'] = Get-AzureRmStorageAccount -ResourceGroupName $Settings.ResourceGroupName
 
         $AzureAssets.Storage.ProvisioningState | Should -BeExactly 'Succeeded'
     }
     It "Has an App Service Plan." {
-        $AzureAssets['AppService'] = Get-AzureRmAppServicePlan -ResourceGroupName $AzureAssets['ResourceGroup'].ResourceGroupName
+        $AzureAssets['AppService'] = Get-AzureRmAppServicePlan -ResourceGroupName $Settings.ResourceGroupName
 
         $AzureAssets.AppService.Status | Should -BeExactly 'Ready'
         $AzureAssets.AppService.NumberOfSites | Should -Be 1
     }
     It "Has a Web App." {
-        $AzureAssets['WebbApps'] = Get-AzureRmWebApp -ResourceGroupName $AzureAssets['ResourceGroup'].ResourceGroupName
+        $AzureAssets['WebbApps'] = Get-AzureRmWebApp -ResourceGroupName $Settings.ResourceGroupName
 
         $AzureAssets.WebbApps | Should -HaveCount 1
         $AzureAssets.WebbApps[0].State | Should -BeExactly 'Running'
-        $AzureAssets.WebbApps[0].SiteName | Should -Be $AzureAssets['ResourceGroup'].ResourceGroupName
+        $AzureAssets.WebbApps[0].SiteName | Should -Be $Settings.AppName
         $AzureAssets.WebbApps[0].ServerFarmId | Should -Be $AzureAssets['AppService'].Id
     }
 }
@@ -157,7 +159,7 @@ $AzureAssets['WebAppPublishingProfile'] = [xml](Get-AzureRmWebAppPublishingProfi
 $AzureAssets['WebAppUserName'] = $AzureAssets['WebAppPublishingProfile'].publishData.publishProfile[0].userName
 $AzureAssets['WebAppUserPwd'] = $AzureAssets['WebAppPublishingProfile'].publishData.publishProfile[0].userPWD
 $AzureAssets['WebAppDeployUrl'] = 'https://{0}.scm.azurewebsites.net:443/deploy' -f 
-    $AzureAssets.ResourceGroup.ResourceGroupName
+    $AzureAssets.ResourceGroup.AppName
 
 # Create the Azure Web App Kudu Authorization header
 # This is used to retrieve the Master key and Function key required to invoke the Azure Function
@@ -303,7 +305,7 @@ $Params = @{
     }
     ResourceGroupName = $Settings.ResourceGroupName 
     ResourceType      = 'Microsoft.Web/sites/SourceControls'
-    ResourceName      = '{0}/web' -f $Settings.ResourceGroupName
+    ResourceName      = '{0}/web' -f $Settings.AppName
     ApiVersion        = '2015-08-01'
     force             = $true
 }
@@ -315,7 +317,7 @@ Describe "Azure Web App Deployment Settings" {
         $Params = @{
             ResourceGroupName = $Settings.ResourceGroupName 
             ResourceType      = 'Microsoft.Web/sites/SourceControls'
-            ResourceName      = '{0}/web' -f $Settings.ResourceGroupName
+            ResourceName      = '{0}/web' -f $Settings.AppName
             ApiVersion        = '2015-08-01'
         }
         $AzureAssets['WebAppDeploymentSettingsGet'] = Get-AzureRmResource @Params
@@ -689,7 +691,7 @@ CodeCommitBranch: master
     $AzureAssets.WebAppUserName
     $AzureAssets.EncryptedWebAppPassword
     $AzureAssets.WebAppDeployUrl
-    $Settings.ResourceGroupName
+    $Settings.AppName
     $AWSAssets.CCGitUserCredentials.UserName
     $AWSAssets.EncryptedGitPassword
 )
@@ -712,7 +714,7 @@ git push origin master
 $Params = @{
     ResourceGroupName = $Settings.ResourceGroupName
     ResourceType      = 'Microsoft.Web/sites/functions'
-    ResourceName      = $Settings.ResourceGroupName
+    ResourceName      = $Settings.AppName
     ApiVersion        = '2015-08-01'
 }
 $AzureAssets['AzureFunctions'] = Get-AzureRmResource @Params
@@ -722,13 +724,13 @@ $AzureAssets['AzureFunctions'] = Get-AzureRmResource @Params
 # These headers are required by Kudu for several operations
 $KuduHeaders = @{
     'Authorization' = $AzureAssets.KuduAuth
-    'X-SITE-DEPLOYMENT-ID' = $Settings.ResourceGroupName
+    'X-SITE-DEPLOYMENT-ID' = $Settings.AppName
 }
 
 
 # Get the Azure Web App deployment history
 $params = @{
-    uri = 'https://{0}.scm.azurewebsites.net/deployments' -f $Settings.ResourceGroupName
+    uri = 'https://{0}.scm.azurewebsites.net/deployments' -f $Settings.AppName
     Headers = $KuduHeaders
     Method = 'GET'
 }
@@ -791,7 +793,7 @@ Get-CWLLogEvent -LogGroupName $AWSAssets.LogGroupName -LogStreamName $AWSAssets.
 
 # Get the Azure Function App master key
 $Params = @{
-    Uri = "https://{0}.scm.azurewebsites.net/api/functions/admin/masterkey" -f $Settings.ResourceGroupName
+    Uri = "https://{0}.scm.azurewebsites.net/api/functions/admin/masterkey" -f $Settings.AppName
     Headers = $KuduHeaders + @{"If-Match"="*"} 
 }
 $maskterkey = Invoke-RestMethod @Params
@@ -799,7 +801,7 @@ $maskterkey = Invoke-RestMethod @Params
 # Get the Azure Function App function key
 $Params = @{
     Uri = "https://{0}.azurewebsites.net/admin/functions/{1}/KEYS?CODE={2}" -f 
-        $Settings.ResourceGroupName, 'PBnC', $maskterkey.masterKey
+        $Settings.AppName, 'PBnC', $maskterkey.masterKey
 }
 $FunctionKeys = Invoke-RestMethod @Params
 
@@ -807,7 +809,7 @@ $FunctionKeys = Invoke-RestMethod @Params
 
 # Make an HTTP Trigger call to the actual Azure Function
 $AzureAssets['AzureFunctionUrl'] = 'https://{0}.azurewebsites.net/api/{1}?code={2}&name=Mark%20Kraus' -f 
-    $Settings.ResourceGroupName, 'PBnC', $FunctionKeys.keys[0].value
+    $Settings.AppName, 'PBnC', $FunctionKeys.keys[0].value
 $AzureAssets['AzureFunctionResult'] = Invoke-RestMethod -Uri $AzureAssets.AzureFunctionUrl
 
 '--------------------------- Azure Function Result --------------------------------------'
@@ -878,5 +880,5 @@ Get-KMSKeyList |
 # Clean up local 
 Pop-Location; Pop-Location
 Remove-Item -force -Recurse -confirm:$false $Settings.GitDirectory
-Remove-Item -force -Recurse $Settings.ResourceGroupName
+Remove-Item -force -Recurse $Settings.CCRepositoryName
 #>

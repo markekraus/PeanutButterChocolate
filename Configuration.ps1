@@ -115,6 +115,7 @@ $Params = @{
     Location = $Settings.ResourceGroupLocation
 }
 $AzureAssets['ResourceGroup'] = New-AzureRmResourceGroup @Params
+
 # This Template deploys the storage account, App Service account, and Function App.
 $Params = @{
     TemplateUri        = $Settings.ResourceTemplateUrl
@@ -148,16 +149,15 @@ Describe "Deployment of '$($Settings.ResourceGroupName)' Azure Function App" {
         $AzureAssets.WebbApps | Should -HaveCount 1
         $AzureAssets.WebbApps[0].State | Should -BeExactly 'Running'
         $AzureAssets.WebbApps[0].SiteName | Should -Be $Settings.AppName
-        $AzureAssets.WebbApps[0].ServerFarmId | Should -Be $AzureAssets['AppService'].Id
     }
 }
 
 
 
 # Grab the PublishProfile for the Web App. This gives us the deployment username and password
-$AzureAssets['WebAppPublishingProfile'] = [xml](Get-AzureRmWebAppPublishingProfile -WebApp $AzureAssets['WebbApps'][0])
-$AzureAssets['WebAppUserName'] = $AzureAssets['WebAppPublishingProfile'].publishData.publishProfile[0].userName
-$AzureAssets['WebAppUserPwd'] = $AzureAssets['WebAppPublishingProfile'].publishData.publishProfile[0].userPWD
+$AzureAssets['WebAppPublishingProfile'] = [xml](Get-AzureRmWebAppPublishingProfile -WebApp $AzureAssets.WebbApps[0])
+$AzureAssets['WebAppUserName'] = $AzureAssets.WebAppPublishingProfile.publishData.publishProfile[0].userName
+$AzureAssets['WebAppUserPwd'] = $AzureAssets.WebAppPublishingProfile.publishData.publishProfile[0].userPWD
 $AzureAssets['WebAppDeployUrl'] = 'https://{0}.scm.azurewebsites.net:443/deploy' -f 
     $AzureAssets.ResourceGroup.AppName
 

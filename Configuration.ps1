@@ -74,7 +74,7 @@ $Settings = @{
     LambdaRoleName                = 'TriggerAzureFunctionDeploymentRole'
     # The description to give the IAM Role the AWS Lambda Function will assume when it is invoked
     LambdaRoleDescription         = 'Role assumed by the TriggerAzureFunctionDeployment Lambda'
-    # Manged IAM policies to apply to the IAM Role
+    # Managed IAM policies to apply to the IAM Role
     LambdaRolePolicyArns          = @(
         'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
         'arn:aws:iam::aws:policy/AWSCodeCommitReadOnly'
